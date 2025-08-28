@@ -5,230 +5,142 @@ import { Agent, run, tool } from "@openai/agents";
 import { z } from "zod";
 import { chromium } from "playwright";
 
-// ========== Browser Launch ==========
+// ===== Browser Launch =====
 const browser = await chromium.launch({
   headless: false,
-  channel: "chrome", // Use installed Chrome
-  args: ["--disable-extensions"], // keep minimal args
+  channel: "chrome",
+  args: ["--disable-extensions"],
 });
-
 const page = await browser.newPage();
 
-// ========== Screenshot Setup ==========
+// ===== Screenshot Setup =====
 const screenshotsDir = path.join(process.cwd(), "screenshots");
 if (!fs.existsSync(screenshotsDir)) {
   fs.mkdirSync(screenshotsDir, { recursive: true });
 }
 let screenshotCounter = 0;
-
-// Helper: timestamped filenames
 function getScreenshotPath() {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   screenshotCounter++;
-  return path.join(
-    screenshotsDir,
-    `${timestamp}_screenshot_${screenshotCounter}.png`
-  );
+  return path.join(screenshotsDir, `${timestamp}_screenshot_${screenshotCounter}.png`);
 }
 
-// ========== Tools ==========
+// ===== Tools =====
 const takeScreenShot = tool({
   name: "take_screenshot",
-  description:
-    "Takes a screenshot of the current page and saves it locally, returns path",
+  description: "Takes a screenshot of the page and saves it",
   parameters: z.object({}),
   async execute() {
-    const screenshotBuffer = await page.screenshot({ type: "png", fullPage: true });
-    const filePath = getScreenshotPath();
-    fs.writeFileSync(filePath, screenshotBuffer);
-    console.log(`📸 Screenshot saved: ${filePath}`);
-    return `Screenshot saved: ${filePath}`;
+    const buf = await page.screenshot({ type: "png", fullPage: true });
+    const pathOut = getScreenshotPath();
+    fs.writeFileSync(pathOut, buf);
+    console.log(`📸 Screenshot saved: ${pathOut}`);
+    return pathOut;
   },
 });
 
 const openURL = tool({
   name: "open_url",
-  description: "Navigates to a specified URL",
-  parameters: z.object({
-    url: z.string().describe("The URL to navigate to"),
-  }),
+  description: "Navigate to URL",
+  parameters: z.object({ url: z.string() }),
   async execute(input) {
-    console.log(`🌐 Navigating to: ${input.url}`);
     await page.goto(input.url, { waitUntil: "networkidle", timeout: 30000 });
-    const currentUrl = page.url();
-    const title = await page.title();
-    return `✅ Navigated to ${currentUrl}, Title: "${title}"`;
-  },
-});
-
-const clickElement = tool({
-  name: "click_element",
-  description: "Clicks on an element using CSS selector",
-  parameters: z.object({
-    selector: z.string().describe("CSS selector of the element"),
-  }),
-  async execute(input) {
-    console.log(`🎯 Clicking element: ${input.selector}`);
-    await page.locator(input.selector).first().click({ timeout: 5000 });
-    return `Clicked element: ${input.selector}`;
-  },
-});
-
-const sendKeys = tool({
-  name: "send_keys",
-  description: "Types text into an element, optionally focusing first",
-  parameters: z.object({
-    text: z.string(),
-    selector: z.string().nullable(),
-  }),
-  async execute(input) {
-    if (input.selector) {
-      await page.locator(input.selector).first().click({ timeout: 5000 });
-    }
-    await page.keyboard.type(input.text, { delay: 10 });
-    return `Typed: "${input.text}"`;
-  },
-});
-
-const clearAndType = tool({
-  name: "clear_and_type",
-  description: "Clears an input field and types new text quickly",
-  parameters: z.object({
-    selector: z.string(),
-    text: z.string(),
-  }),
-  async execute(input) {
-    const element = page.locator(input.selector).first();
-    await element.click({ clickCount: 3, timeout: 5000 });
-    await page.keyboard.press("Backspace");
-    await element.type(input.text, { delay: 10 });
-    return `✅ Typed "${input.text}" in ${input.selector}`;
+    return `Navigated to ${page.url()} with title "${await page.title()}"`;
   },
 });
 
 const waitForElement = tool({
   name: "wait_for_element",
-  description: "Waits for an element to appear",
-  parameters: z.object({
-    selector: z.string(),
-    timeout: z.number().nullable(),
-  }),
+  description: "Waits for element",
+  parameters: z.object({ selector: z.string(), timeout: z.number().nullable() }),
   async execute(input) {
     const timeout = input.timeout || 5000;
-    await page.locator(input.selector).first().waitFor({
-      state: "visible",
-      timeout,
-    });
-    return `Element ${input.selector} appeared`;
+    await page.locator(input.selector).first().waitFor({ state: "visible", timeout });
+    return `Element ${input.selector} visible`;
   },
 });
 
-const findSidebarLinks = tool({
-  name: "find_sidebar_links",
-  description: "Finds sidebar links in ChaiCode UI Vault",
-  parameters: z.object({}),
-  async execute() {
-    const selectors = [
-      "nav a",
-      ".sidebar a",
-      "aside a",
-      'a:has-text("Sign Up")',
-      'a:has-text("Login")',
-    ];
-
-    const results = [];
-    for (const selector of selectors) {
-      const elements = page.locator(selector);
-      const count = await elements.count();
-      if (count > 0) {
-        for (let i = 0; i < Math.min(count, 3); i++) {
-          const el = elements.nth(i);
-          results.push({
-            selector,
-            text: (await el.textContent())?.trim(),
-            href: await el.getAttribute("href"),
-            isVisible: await el.isVisible(),
-          });
-        }
-      }
-    }
-    return `Found sidebar links:\n${JSON.stringify(results, null, 2)}`;
+const clearAndType = tool({
+  name: "clear_and_type",
+  description: "Clears input and types",
+  parameters: z.object({ selector: z.string(), text: z.string() }),
+  async execute(input) {
+    const el = page.locator(input.selector).first();
+    await el.click({ clickCount: 3 });
+    await page.keyboard.press("Backspace");
+    await el.type(input.text, { delay: 10 });
+    return `Typed "${input.text}" in ${input.selector}`;
   },
 });
 
 const clickSidebarItem = tool({
   name: "click_sidebar_item",
-  description: "Clicks on a sidebar item by text",
-  parameters: z.object({
-    itemText: z.string(),
-  }),
+  description: "Clicks sidebar item by text",
+  parameters: z.object({ text: z.string() }),
   async execute(input) {
-    const locator = page.locator(`a:has-text("${input.itemText}")`).first();
-    if (await locator.isVisible()) {
-      await locator.click({ timeout: 5000 });
-      return `Clicked sidebar item: ${input.itemText}`;
-    }
-    return `Sidebar item "${input.itemText}" not found`;
+    const el = page.locator(`a:has-text("${input.text}")`).first();
+    await el.click({ timeout: 5000 });
+    return `Clicked sidebar item: ${input.text}`;
   },
 });
 
-// ========== Agent ==========
-const websiteAutomationAgent = new Agent({
-  name: "ChaiCode UI Vault Automation Agent",
-  instructions: `
-    Automate sign up flow on https://ui.chaicode.com:
-    1. Take initial screenshot
-    2. Navigate to site
-    3. Screenshot after navigation
-    4. Find sidebar links
-    5. Click "Sign Up" sidebar item
-    6. Screenshot sign-up form
-    7. Fill form fields with clear_and_type:
-       - First Name: Test
-       - Last Name: User
-       - Email: test@chaicode.com
-       - Username: testuser123
-       - Password: TestPassword123!
-       - Confirm Password: TestPassword123!
-       - Phone: +1234567890
-    8. Submit form
-    9. Take final screenshot
-  `,
-  tools: [
-    takeScreenShot,
-    openURL,
-    clickElement,
-    sendKeys,
-    clearAndType,
-    waitForElement,
-    findSidebarLinks,
-    clickSidebarItem,
-  ],
+const clickElement = tool({
+  name: "click_element",
+  description: "Clicks element by CSS selector",
+  parameters: z.object({ selector: z.string() }),
+  async execute(input) {
+    await page.locator(input.selector).first().click({ timeout: 5000 });
+    return `Clicked element: ${input.selector}`;
+  },
 });
 
-// ========== Main ==========
+// ===== Agent =====
+const websiteAutomationAgent = new Agent({
+  name: "ChaiCode Sign Up Agent",
+  instructions: `
+    Automate sign-up flow on https://ui.chaicode.com:
+    1. Take screenshot
+    2. Navigate to site
+    3. Screenshot
+    4. Click "Sign Up" sidebar item
+    5. Screenshot
+    6. Fill form fields using wait_for_element + clear_and_type:
+       - First Name → input[placeholder="First Name"] → "Test"
+       - Last Name → input[placeholder="Last Name"] → "User"
+       - Email → input[placeholder="john@example.com"] → "test@chaicode.com"
+       - Username → input[placeholder="Username"] → "testuser123"
+       - Password → input[placeholder="Password"] → "TestPassword123!"
+       - Confirm Password → input[placeholder="Confirm Password"] → "TestPassword123!"
+       - Phone → input[type="tel"] → "+1234567890"
+    7. Submit form with click_element on 'button[type="submit"]'
+    8. Final screenshot
+  `,
+  tools: [takeScreenShot, openURL, waitForElement, clearAndType, clickSidebarItem, clickElement],
+});
+
+// ===== Main =====
 async function executeAutomation() {
   try {
-    console.log("🚀 Starting browser automation agent...");
-
+    console.log("🚀 Starting automation...");
     const result = await run(
       websiteAutomationAgent,
       [
-        { role: "user", content: "Follow the exact steps in your instructions..." }
+        {
+          role: "user",
+          content: "Run the full sign-up automation flow as per your instructions.",
+        },
       ],
       {
-        maxTurns: 40,
+        maxTurns: 30,
         apiKey: process.env.OPENAI_API_KEY,
       }
     );
-
-    console.log("✅ Automation completed successfully!");
-    console.log("📊 Final result:", result.finalOutput);
-  } catch (error) {
-    console.error("❌ Error during automation:", error);
+    console.log("✅ Done! Final output:", result.finalOutput);
+  } catch (err) {
+    console.error("❌ Error:", err);
     try {
       await takeScreenShot.execute({});
-    } catch {}
+    } catch { }
   } finally {
     await browser.close();
     console.log("🌐 Browser closed");
