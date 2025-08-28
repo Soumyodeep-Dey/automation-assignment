@@ -10,6 +10,8 @@ const browser = await chromium.launch({
   headless: false,
   channel: "chrome",
   args: [
+    "--start-maximized",           // Start maximized
+    "--start-fullscreen",          // Start in fullscreen
     "--disable-extensions",
     "--disable-file-system",
     "--no-sandbox",
@@ -17,10 +19,18 @@ const browser = await chromium.launch({
     "--disable-dev-shm-usage",
     "--disable-web-security",
     "--allow-running-insecure-content",
+    "--disable-popup-blocking",    // Disable popup blocking
+    "--disable-notifications",     // Disable notification popups
+    "--disable-infobars",          // Disable info bars
+    "--window-size=1920,1080",     // Set window size
   ],
 });
 
-const page = await browser.newPage();
+const context = await browser.newContext({
+  viewport: { width: 1920, height: 1080 }  // Set viewport size
+});
+
+const page = await context.newPage();
 
 // ================== Screenshot Setup ==================
 const screenshotsDir = path.join(process.cwd(), "screenshots");
@@ -60,6 +70,44 @@ const openURL = tool({
     console.log(`🌐 Navigating to: ${input.url}`);
     await page.goto(input.url, { waitUntil: "networkidle" });
     await page.waitForTimeout(3000);
+
+    // Handle any popups or overlays that might appear
+    try {
+      // Close any popup dialogs
+      page.on('dialog', async dialog => {
+        console.log(`Dialog appeared: ${dialog.message()}`);
+        await dialog.dismiss();
+      });
+
+      // Check for common popup/overlay selectors and close them
+      const popupSelectors = [
+        '[role="dialog"]',
+        '.modal',
+        '.popup',
+        '.overlay',
+        '[data-testid*="modal"]',
+        '[data-testid*="popup"]'
+      ];
+
+      for (const selector of popupSelectors) {
+        try {
+          const popup = page.locator(selector);
+          if (await popup.count() > 0) {
+            // Try to find and click close button
+            const closeButton = popup.locator('button:has-text("×"), button:has-text("Close"), [aria-label*="close" i]').first();
+            if (await closeButton.count() > 0) {
+              await closeButton.click();
+              console.log(`Closed popup with selector: ${selector}`);
+            }
+          }
+        } catch (e) {
+          // Ignore popup closing errors
+        }
+      }
+    } catch (e) {
+      console.log("No popups to handle");
+    }
+
     return `Successfully navigated to ${input.url}`;
   },
 });
